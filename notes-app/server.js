@@ -38,6 +38,22 @@ const noteSchema = new mongoose.Schema({
 const User = mongoose.model("User", userSchema);
 const Note = mongoose.model("Note", noteSchema);
 
+const authMiddleware = (req, res, next) => {
+  const authHeader = req.headers["authorization"];
+  console.log("Authorization Header:", authHeader);
+  if (!authHeader)
+    return res.status(401).json({ message: "No token provided" });
+
+  const token = authHeader.split(" ")[1];
+  if (!token) return res.status(401).json({ message: "No token provided" });
+
+  jwt.verify(token, SECRET_KEY, (err, decoded) => {
+    if (err)
+      return res.status(401).json({ message: "Failed to authenticate token" });
+    req.userId = decoded.userId;
+    next();
+  });
+};
 // CRUD 라우트
 app.post("/register", async (req, res) => {
   try {
@@ -54,7 +70,7 @@ app.post("/register", async (req, res) => {
 // 로그인 API
 app.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, name } = req.body;
     const user = await User.findOne({ email });
     if (!user) return res.status(400).json({ message: "Invalid credentials" });
 
@@ -65,12 +81,21 @@ app.post("/login", async (req, res) => {
     const token = jwt.sign({ userId: user._id }, SECRET_KEY, {
       expiresIn: "1h",
     });
-    res.json({ token });
+    res.json({ token, name: user.name });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
-app.get("/notes", async (req, res) => {
+app.get("/profile", authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId).select("-password"); // 비밀번호 제외
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.get("/notes", authMiddleware, async (req, res) => {
   try {
     const notes = await Note.find({ userId: req.userId });
     res.json(notes);
@@ -79,23 +104,27 @@ app.get("/notes", async (req, res) => {
   }
 });
 
-app.post("/notes", async (req, res) => {
+app.post("/notes", authMiddleware, async (req, res) => {
   const note = new Note({
     title: req.body.title,
     content: req.body.content,
+    userId: req.userId, // 사용자 ID를 노트와 함께 저장
   });
   await note.save();
   res.send(note);
 });
 
-app.put("/notes/:id", async (req, res) => {
-  const note = await Note.findByIdAndUpdate(req.params.id, req.body, {
-    new: true,
-  });
-  res.send(note);
+app.put("/notes/:id", authMiddleware, async (req, res) => {
+  const { title, content } = req.body;
+  const note = await Note.findOneAndUpdate(
+    { _id: req.params.id, userId: req.userId },
+    { title, content },
+    { new: true }
+  );
+  res.json(note);
 });
 
-app.delete("/notes/:id", async (req, res) => {
+app.delete("/notes/:id", authMiddleware, async (req, res) => {
   await Note.findByIdAndDelete(req.params.id);
   res.send({ message: "Note deleted" });
 });
